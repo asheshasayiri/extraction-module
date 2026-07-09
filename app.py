@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, render_template_string
 from extractor import run_extraction
 import os
 import uuid
+import fitz  # PyMuPDF — also used here to genuinely validate PDF structure
 
 app = Flask(__name__)
 
@@ -11,6 +12,36 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE_MB * 1024 * 1024
 
 TEMP_DIR = "temp_uploads"
 os.makedirs(TEMP_DIR, exist_ok=True)
+
+# Real PDF file signature (magic bytes). Every valid PDF starts with this,
+# regardless of what the filename says. A renamed .exe or .jpg will NOT
+# have these bytes, so checking this catches spoofed extensions.
+PDF_MAGIC_BYTES = b"%PDF-"
+
+
+def has_valid_pdf_signature(filepath):
+    """Check the actual file content starts with the PDF magic bytes."""
+    try:
+        with open(filepath, "rb") as f:
+            header = f.read(5)
+        return header == PDF_MAGIC_BYTES
+    except Exception:
+        return False
+
+
+def is_pdf_structurally_valid(filepath):
+    """
+    Beyond the magic bytes, confirm PyMuPDF can actually open and parse
+    the file as a PDF document (catches corrupted or truncated files that
+    happen to still start with the right header).
+    """
+    try:
+        doc = fitz.open(filepath)
+        page_count = doc.page_count  # forces PyMuPDF to actually parse structure
+        doc.close()
+        return page_count > 0
+    except Exception:
+        return False
 
 # Simple demo UI — just for testing and demo purposes
 @app.route("/")
@@ -97,6 +128,25 @@ def extract():
 
     filepath = os.path.join(TEMP_DIR, f"{uuid.uuid4().hex}.pdf")
     file.save(filepath)
+
+    # --- Real content validation, not just filename/extension ---
+    # A file can be named "certificate.pdf" and still not actually be a PDF
+    # (renamed image, executable, corrupted upload, etc). Check both:
+    # 1) the file's magic bytes match the real PDF signature
+    # 2) PyMuPDF can actually parse it as a structurally valid PDF
+    if not has_valid_pdf_signature(filepath):
+        os.remove(filepath)
+        return jsonify({
+            "error": "File does not have a valid PDF signature. "
+                     "The extension says .pdf but the file content is not actually a PDF."
+        }), 400
+
+    if not is_pdf_structurally_valid(filepath):
+        os.remove(filepath)
+        return jsonify({
+            "error": "File has a PDF header but could not be parsed as a valid PDF "
+                     "(possibly corrupted or truncated)."
+        }), 400
 
     try:
         result = run_extraction(filepath)

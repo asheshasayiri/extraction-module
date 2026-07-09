@@ -3,28 +3,28 @@ import shutil
 import fitz
 import pytesseract
 from PIL import Image
+import io   # ✅ ADD THIS
 
-# Cross-platform tesseract path handling.
-# Original code hardcoded a Windows-only path unconditionally, which crashes
-# immediately on Linux/Mac (e.g. Render, Vercel, teammates' machines).
+# Cross-platform tesseract path handling
 if platform.system() == "Windows":
     windows_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
     if shutil.which("tesseract") is None:
         pytesseract.pytesseract.tesseract_cmd = windows_path
-# On Linux/Mac, pytesseract will find `tesseract` on PATH automatically
-# as long as it's installed (e.g. `apt install tesseract-ocr` / `brew install tesseract`).
 
+def extract_text_via_ocr(pdf_path):
+    try:
+        doc = fitz.open(pdf_path)
+        full_text = ""
 
-def extract_text_with_ocr(pdf_path):
+        for page in doc:
+            pix = page.get_pixmap(matrix=fitz.Matrix(3, 3))
+            img_bytes = pix.tobytes("png")
+            img = Image.open(io.BytesIO(img_bytes))  # now works
 
-    doc = fitz.open(pdf_path)
-    text = ""
+            text = pytesseract.image_to_string(img, lang="eng")
+            full_text += text + "\n"
 
-    for page in doc:
-        pix = page.get_pixmap()
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        return full_text
 
-        page_text = pytesseract.image_to_string(img)
-        text += page_text
-
-    return text.strip()
+    except Exception as e:
+        return f"OCR_ERROR: {str(e)}"
